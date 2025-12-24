@@ -39,9 +39,68 @@ resource "aws_subnet" "private_subnet" {
   }, var.default_tags)
 }
 
+resource "aws_internet_gateway" "igw" {
+  depends_on = [ aws_vpc.this ]
+  vpc_id = aws_vpc.this.id
+  tags = merge({
+    "Name" = "igw"
+  }, var.default_tags)
+}
+
+resource "aws_route" "public_route" {
+  depends_on = [ aws_internet_gateway.igw, aws_vpc.this ]
+  route_table_id = aws_vpc.this.main_route_table_id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id = aws_internet_gateway.igw.id
+}
+
+resource "aws_route_table_association" "public-route-association" {
+  depends_on = [ aws_vpc.this ]
+  count = local.azs
+  subnet_id = element(aws_subnet.public_subnet.*.id, count.index)
+  route_table_id = aws_vpc.this.main_route_table_id
+}
+
+
 // NATGateway
-# resource "aws_nat_gateway" "ngw" {
-#   depends_on = [ aws_vpc.this ]
-#   count = local.azs
-#   subnet_id = element(aws_subnet.public_subnet.*.id, count.index)
-# }
+
+// moi nat gateway se co the su dung 1 public subnet de tao ra 1 elastic ip de su dung cho nat gateway
+resource "aws_eip" "private-eip" {
+  depends_on = [ aws_vpc.this ]
+  count = local.azs
+  tags = merge({
+    "Name" = "private-eip-${count.index}"
+  }, var.default_tags)
+}
+
+resource "aws_nat_gateway" "private-natgw" {
+  depends_on = [ aws_vpc.this ]
+  count = local.azs
+  subnet_id = element(aws_subnet.public_subnet.*.id, count.index)
+  allocation_id = element(aws_eip.private-eip.*.id, count.index)
+  tags = merge({
+    "Name" = "private-natgw-${count.index}"
+  }, var.default_tags)
+}
+
+resource "aws_route_table" "private-route-table" {
+  depends_on = [ aws_vpc.this, aws_nat_gateway.private-natgw ]
+  count  = local.azs
+  vpc_id = aws_vpc.this.id
+  tags = merge({
+    "Name" = "private-route-table-${count.index}"
+  }, var.default_tags)
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    nat_gateway_id = element(aws_nat_gateway.private-natgw.*.id, count.index)
+  }
+
+}
+
+resource "aws_route_table_association" "private-route-association" {
+  depends_on = [ aws_vpc.this ]
+  count = local.azs
+  subnet_id = element(aws_subnet.private_subnet.*.id, count.index)
+  route_table_id = element(aws_route_table.private-route-table.*.id, count.index)
+}
